@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shared To-Do List</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .task-done {
+            text-decoration: line-through;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="max-w-4xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-md">
+        <h1 class="text-2xl font-bold mb-4">共享 To-Do List</h1>
+        <div id="userInfo" class="mb-4 text-sm text-gray-600">
+            您的 IP 地址: <span id="userIp"></span>
+            <div class="mt-2">
+                <input type="text" id="displayName" placeholder="设置显示名称" class="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button onclick="updateDisplayName()" class="bg-green-500 text-white p-2 rounded-md hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 ml-2">更新名称</button>
+            </div>
+        </div>
+        <div class="flex flex-col mb-4">
+            <textarea id="newTask" placeholder="添加新任务 (每行一个任务)" rows="3" class="w-full p-2 border border-gray-300 rounded-t-md focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            <button onclick="addTask()" class="bg-blue-500 text-white p-2 rounded-b-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">添加</button>
+        </div>
+        <ul id="taskList"></ul>
+    </div>
+    <script src="/script.js"></script>
+</body>
+</html>

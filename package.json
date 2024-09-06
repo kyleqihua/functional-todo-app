@@ -1,0 +1,13 @@
+{
+  "name": "shared-todo-list",
+  "version": "1.0.0",
+  "description": "A shared todo list application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "sqlite3": "^5.0.2"
+  }
+}
