@@ -1,71 +1,61 @@
+const { Pool } = require("@vercel/postgres");
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const app = express();
 const port = process.env.PORT || 3000;
-const dbPath = process.env.DB_PATH || "./todo.db";
 
 // 设置信任代理
 app.set("trust proxy", true);
 
-// 连接到 SQLite 数据库
-const db = new sqlite3.Database(dbPath);
+// 创建 Postgres 连接池
+const pool = new Pool({
+	connectionString: process.env.POSTGRES_URL,
+});
 
-// 将数据库操作包装在 Promise 中
-const dbAll = (query, params) =>
-	new Promise((resolve, reject) => {
-		db.all(query, params, (error, rows) => {
-			if (error) reject(error);
-			else resolve(rows);
-		});
-	});
+pool.on("error", (err) => {
+	console.error("Unexpected error on idle client", err);
+	process.exit(-1);
+});
 
-const dbRun = (query, params) =>
-	new Promise((resolve, reject) => {
-		db.run(query, params, function (error) {
-			if (error) reject(error);
-			else resolve(this);
-		});
-	});
-
-// 迁移：检查并添加 last_updated 列
-const migrateDatabase = async () => {
-	try {
-		const rows = await dbAll("PRAGMA table_info(tasks)", []);
-		const hasLastUpdated = rows.some((row) => row.name === "last_updated");
-		if (!hasLastUpdated) {
-			await dbRun("ALTER TABLE tasks ADD COLUMN last_updated INTEGER");
-			console.log("Added last_updated column to tasks table");
-		}
-	} catch (error) {
-		console.error("Error during database migration:", error);
-	}
-};
+// 查询函数
+const query = (text, params) => pool.query(text, params);
 
 // 创建任务表和用户表
 const createTables = async () => {
 	try {
-		await dbRun(`CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_ip TEXT,
-      text TEXT,
-      completed INTEGER,
-      last_updated INTEGER
-    )`);
-		await dbRun(`CREATE TABLE IF NOT EXISTS users (
-      ip TEXT PRIMARY KEY,
-      display_name TEXT
-    )`);
+		await query(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id SERIAL PRIMARY KEY,
+        user_ip TEXT,
+        text TEXT,
+        completed BOOLEAN,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+		await query(`
+      CREATE TABLE IF NOT EXISTS users (
+        ip TEXT PRIMARY KEY,
+        display_name TEXT
+      )
+    `);
 		console.log("Tables created successfully");
 	} catch (error) {
-		console.error("Error creating tables:", error);
+		console.error("Error creating tables:", error.message);
+		console.error("Error stack:", error.stack);
+		throw error;
 	}
 };
 
 // 初始化数据库
 const initializeDatabase = async () => {
-	await createTables();
-	await migrateDatabase();
+	console.log("Initializing database...");
+	try {
+		await createTables();
+		console.log("Database initialized successfully");
+	} catch (error) {
+		console.error("Failed to initialize database:", error.message);
+		throw error;
+	}
 };
 
 initializeDatabase()
@@ -88,15 +78,15 @@ initializeDatabase()
 			const userIp = getUserIp(req);
 			console.log("Fetching tasks for IP:", userIp);
 			try {
-				const rows = await dbAll(
+				const { rows } = await query(
 					`
-        SELECT tasks.*, users.display_name 
-        FROM tasks 
-        LEFT JOIN users ON tasks.user_ip = users.ip 
-        ORDER BY 
-          CASE WHEN user_ip = ? THEN 0 ELSE 1 END, 
-          last_updated DESC
-      `,
+          SELECT tasks.*, users.display_name 
+          FROM tasks 
+          LEFT JOIN users ON tasks.user_ip = users.ip 
+          ORDER BY 
+            CASE WHEN user_ip = $1 THEN 0 ELSE 1 END, 
+            last_updated DESC
+        `,
 					[userIp],
 				);
 				console.log("Tasks fetched:", rows);
@@ -111,15 +101,14 @@ initializeDatabase()
 		app.post("/api/tasks", async (req, res) => {
 			const { text } = req.body;
 			const userIp = getUserIp(req);
-			const timestamp = Date.now();
-			console.log("Adding new task:", { text, userIp, timestamp });
+			console.log("Adding new task:", { text, userIp });
 			try {
-				const result = await dbRun(
-					"INSERT INTO tasks (user_ip, text, completed, last_updated) VALUES (?, ?, 0, ?)",
-					[userIp, text, timestamp],
+				const { rows } = await query(
+					"INSERT INTO tasks (user_ip, text, completed, last_updated) VALUES ($1, $2, false, CURRENT_TIMESTAMP) RETURNING id",
+					[userIp, text],
 				);
-				console.log("Task added successfully, ID:", result.lastID);
-				res.json({ id: result.lastID });
+				console.log("Task added successfully, ID:", rows[0].id);
+				res.json({ id: rows[0].id });
 			} catch (error) {
 				console.error("Error adding task:", error);
 				res.status(500).json({ error: error.message });
@@ -131,13 +120,12 @@ initializeDatabase()
 			const { id } = req.params;
 			const { completed } = req.body;
 			const userIp = getUserIp(req);
-			const timestamp = Date.now();
 			try {
-				const result = await dbRun(
-					"UPDATE tasks SET completed = ?, last_updated = ? WHERE id = ? AND user_ip = ?",
-					[completed ? 1 : 0, timestamp, id, userIp],
+				const { rowCount } = await query(
+					"UPDATE tasks SET completed = $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2 AND user_ip = $3",
+					[completed, id, userIp],
 				);
-				res.json({ changes: result.changes });
+				res.json({ changes: rowCount });
 			} catch (error) {
 				console.error("Error updating task:", error);
 				res.status(500).json({ error: error.message });
@@ -149,11 +137,11 @@ initializeDatabase()
 			const { id } = req.params;
 			const userIp = getUserIp(req);
 			try {
-				const result = await dbRun(
-					"DELETE FROM tasks WHERE id = ? AND user_ip = ?",
+				const { rowCount } = await query(
+					"DELETE FROM tasks WHERE id = $1 AND user_ip = $2",
 					[id, userIp],
 				);
-				res.json({ changes: result.changes });
+				res.json({ changes: rowCount });
 			} catch (error) {
 				console.error("Error deleting task:", error);
 				res.status(500).json({ error: error.message });
@@ -165,8 +153,8 @@ initializeDatabase()
 			const { displayName } = req.body;
 			const userIp = getUserIp(req);
 			try {
-				await dbRun(
-					"INSERT OR REPLACE INTO users (ip, display_name) VALUES (?, ?)",
+				await query(
+					"INSERT INTO users (ip, display_name) VALUES ($1, $2) ON CONFLICT (ip) DO UPDATE SET display_name = $2",
 					[userIp, displayName],
 				);
 				res.json({ success: true });
@@ -180,11 +168,24 @@ initializeDatabase()
 		app.get("/api/user", async (req, res) => {
 			const userIp = getUserIp(req);
 			try {
-				const row = await dbAll("SELECT * FROM users WHERE ip = ?", [userIp]);
-				res.json(row[0] || { ip: userIp, display_name: userIp });
+				const { rows } = await query("SELECT * FROM users WHERE ip = $1", [
+					userIp,
+				]);
+				res.json(rows[0] || { ip: userIp, display_name: userIp });
 			} catch (error) {
 				console.error("Error fetching user info:", error);
 				res.status(500).json({ error: error.message });
+			}
+		});
+
+		// 健康检查端点
+		app.get("/health", async (req, res) => {
+			try {
+				await pool.query("SELECT 1");
+				res.status(200).send("OK");
+			} catch (error) {
+				console.error("Health check failed:", error);
+				res.status(500).send("Error");
 			}
 		});
 
